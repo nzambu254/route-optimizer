@@ -47,6 +47,7 @@ export class TransportGraph {
       (a, b) => a.distance < b.distance
     );
 
+    // Initialize distances and times
     for (const stationId of this.adjacencyList.keys()) {
       distances[stationId] = stationId === start ? 0 : Infinity;
       times[stationId] = stationId === start ? 0 : Infinity;
@@ -66,10 +67,12 @@ export class TransportGraph {
       const currentTime = times[currentId];
       const currentStation = this.stations.get(currentId);
 
+      // Skip if station is closed and we're considering time
       if (considerTime && currentStation && !this.isStationOpen(currentStation, currentTime)) {
         continue;
       }
 
+      // Explore neighbors
       for (const edge of this.adjacencyList.get(currentId) || []) {
         if (!this.stations.has(edge.to)) continue;
 
@@ -95,6 +98,86 @@ export class TransportGraph {
       totalDistance: distances[end],
       totalTime: times[end]
     };
+  }
+
+  aStar(start: string, end: string, considerTime: boolean = false): {
+    path: string[];
+    totalDistance: number;
+    totalTime: number;
+  } {
+    const openSet = new PriorityQueue<{ id: string; fScore: number }>(
+      (a, b) => a.fScore < b.fScore
+    );
+    const cameFrom: Record<string, string | null> = {};
+    const gScore: Record<string, number> = {};
+    const fScore: Record<string, number> = {};
+
+    // Initialize scores
+    for (const stationId of this.adjacencyList.keys()) {
+      gScore[stationId] = Infinity;
+      fScore[stationId] = Infinity;
+    }
+    gScore[start] = 0;
+    fScore[start] = this.heuristic(start, end);
+
+    openSet.enqueue({ id: start, fScore: fScore[start] });
+
+    while (!openSet.isEmpty()) {
+      const { id: current } = openSet.dequeue()!;
+
+      if (current === end) {
+        return {
+          path: this.reconstructPath(cameFrom, end),
+          totalDistance: gScore[end],
+          totalTime: this.calculateTime(this.reconstructPath(cameFrom, end))
+        };
+      }
+
+      const currentTime = gScore[current];
+      const currentStation = this.stations.get(current);
+
+      if (considerTime && currentStation && !this.isStationOpen(currentStation, currentTime)) {
+        continue;
+      }
+
+      for (const edge of this.adjacencyList.get(current) || []) {
+        if (!this.stations.has(edge.to)) continue;
+
+        const tentativeGScore = gScore[current] + edge.distance;
+        if (tentativeGScore < gScore[edge.to]) {
+          cameFrom[edge.to] = current;
+          gScore[edge.to] = tentativeGScore;
+          fScore[edge.to] = tentativeGScore + this.heuristic(edge.to, end);
+          if (!openSet.some(item => item.id === edge.to)) {
+            openSet.enqueue({ id: edge.to, fScore: fScore[edge.to] });
+          }
+        }
+      }
+    }
+
+    return { path: [], totalDistance: Infinity, totalTime: Infinity };
+  }
+
+  private heuristic(from: string, to: string): number {
+    const fromStation = this.stations.get(from);
+    const toStation = this.stations.get(to);
+    if (!fromStation || !toStation) return 0;
+
+    // Simple Euclidean distance as heuristic
+    const latDiff = fromStation.coordinates.lat - toStation.coordinates.lat;
+    const lngDiff = fromStation.coordinates.lng - toStation.coordinates.lng;
+    return Math.sqrt(latDiff * latDiff + lngDiff * lngDiff);
+  }
+
+  private calculateTime(path: string[]): number {
+    let totalTime = 0;
+    for (let i = 0; i < path.length - 1; i++) {
+      const edge = this.adjacencyList.get(path[i])?.find(e => e.to === path[i + 1]);
+      if (edge) {
+        totalTime += edge.estimatedTime * edge.trafficMultiplier;
+      }
+    }
+    return totalTime;
   }
 
   private reconstructPath(previous: Record<string, string | null>, end: string): string[] {
@@ -160,6 +243,15 @@ export class TransportGraph {
       edge.trafficMultiplier = multiplier;
       edge.lastUpdated = new Date();
     }
+
+    // Update reverse edge if bidirectional
+    if (this.adjacencyList.get(to)) {
+      const reverseEdge = this.adjacencyList.get(to)?.find(e => e.to === from);
+      if (reverseEdge && reverseEdge.isBidirectional) {
+        reverseEdge.trafficMultiplier = multiplier;
+        reverseEdge.lastUpdated = new Date();
+      }
+    }
   }
 
   private clone(): TransportGraph {
@@ -167,6 +259,10 @@ export class TransportGraph {
     newGraph.adjacencyList = new Map(JSON.parse(JSON.stringify(Array.from(this.adjacencyList))));
     newGraph.stations = new Map(JSON.parse(JSON.stringify(Array.from(this.stations))));
     return newGraph;
+  }
+
+  getStation(id: string): Station | undefined {
+    return this.stations.get(id);
   }
 }
 
@@ -185,5 +281,9 @@ class PriorityQueue<T> {
 
   isEmpty(): boolean {
     return this.elements.length === 0;
+  }
+
+  some(predicate: (item: T) => boolean): boolean {
+    return this.elements.some(predicate);
   }
 }

@@ -26,7 +26,9 @@ export default defineNuxtConfig({
 
   components: {
     global: true,
-    dirs: ['~/components']
+    dirs: ['~/components',
+      '~/components/routes'
+    ]
   },
 
   build: {
