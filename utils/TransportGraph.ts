@@ -1,7 +1,7 @@
-import type { Station, Edge } from '@/types/transport';
+import type { Station, RouteEdge } from '@/types/transport';
 
 export class TransportGraph {
-  private adjacencyList: Map<string, Edge[]>;
+  private adjacencyList: Map<string, RouteEdge[]>;
   private stations: Map<string, Station>;
 
   constructor() {
@@ -10,13 +10,20 @@ export class TransportGraph {
   }
 
   addStation(station: Station): void {
-    this.stations.set(station.id, station);
-    if (!this.adjacencyList.has(station.id)) {
-      this.adjacencyList.set(station.id, []);
+    const stationWithDefaults = {
+      ...station,
+      operatingHours: station.operatingHours || {
+        open: "06:00",
+        close: "22:00"
+      }
+    };
+    this.stations.set(stationWithDefaults.id, stationWithDefaults);
+    if (!this.adjacencyList.has(stationWithDefaults.id)) {
+      this.adjacencyList.set(stationWithDefaults.id, []);
     }
   }
 
-  addRoute(edge: Edge): void {
+  addRoute(edge: RouteEdge): void {
     this.adjacencyList.get(edge.from)?.push(edge);
     if (edge.isBidirectional) {
       this.adjacencyList.get(edge.to)?.push({
@@ -40,7 +47,6 @@ export class TransportGraph {
       (a, b) => a.distance < b.distance
     );
 
-    // Initialize distances
     for (const stationId of this.adjacencyList.keys()) {
       distances[stationId] = stationId === start ? 0 : Infinity;
       times[stationId] = stationId === start ? 0 : Infinity;
@@ -60,7 +66,6 @@ export class TransportGraph {
       const currentTime = times[currentId];
       const currentStation = this.stations.get(currentId);
 
-      // Skip if station is closed and we're considering time
       if (considerTime && currentStation && !this.isStationOpen(currentStation, currentTime)) {
         continue;
       }
@@ -104,10 +109,12 @@ export class TransportGraph {
     return path.length > 1 ? path : [];
   }
 
-  private isStationOpen(station: Station, currentTimeMinutes: number): boolean {
-    const { open, close } = station.operatingHours;
-    const [openHours, openMinutes] = open.split(':').map(Number);
-    const [closeHours, closeMinutes] = close.split(':').map(Number);
+  private isStationOpen(station: Station | undefined, currentTimeMinutes: number): boolean {
+    if (!station?.operatingHours) return true;
+
+    const { open = "06:00", close = "22:00" } = station.operatingHours;
+    const [openHours = 6, openMinutes = 0] = open.split(':').map(Number);
+    const [closeHours = 22, closeMinutes = 0] = close.split(':').map(Number);
 
     const openTime = openHours * 60 + openMinutes;
     const closeTime = closeHours * 60 + closeMinutes;
@@ -126,11 +133,9 @@ export class TransportGraph {
       time: number;
     }> = [];
 
-    // Basic implementation - in production you might want Yen's algorithm
     const mainPath = this.dijkstra(start, end);
     if (mainPath.path.length) results.push(mainPath);
 
-    // Find alternatives by removing one edge at a time
     if (results.length < maxPaths) {
       for (const edge of this.adjacencyList.get(start) || []) {
         const tempGraph = this.clone();

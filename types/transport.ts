@@ -6,7 +6,7 @@ export interface Station {
     lng: number
   }
   capacity: number
-  operatingHours: {
+  operatingHours?: {
     open: string
     close: string
   }

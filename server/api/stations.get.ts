@@ -14,7 +14,10 @@ export default defineEventHandler(async () => {
       name: station.name,
       coordinates: station.coordinates,
       capacity: station.capacity,
-      operatingHours: station.operating_hours
+      operatingHours: station.operating_hours || {
+        open: "06:00",
+        close: "22:00"
+      }
     }))
   } catch (error) {
     console.error('Error fetching stations:', error)

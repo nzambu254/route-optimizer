@@ -60,8 +60,8 @@
             </div>
           </div>
           <div class="metrics">
-            <div>Total Distance: {{ optimalRoute.totalDistance.toFixed(2) }} km</div>
-            <div>Total Time: {{ optimalRoute.totalTime.toFixed(2) }} minutes</div>
+            <div>Total Distance: {{ optimalRoute.totalDistance?.toFixed(2) || 'N/A' }} km</div>
+            <div>Total Time: {{ optimalRoute.totalTime?.toFixed(2) || 'N/A' }} minutes</div>
           </div>
         </div>
 
@@ -75,8 +75,8 @@
               @click="selectAlternative(route)"
             >
               <div class="option-header">Option {{ index + 1 }}</div>
-              <div>Distance: {{ route.distance.toFixed(2) }} km</div>
-              <div>Time: {{ route.time.toFixed(2) }} min</div>
+              <div>Distance: {{ route.distance?.toFixed(2) || 'N/A' }} km</div>
+              <div>Time: {{ route.time?.toFixed(2) || 'N/A' }} min</div>
             </div>
           </div>
         </div>
@@ -86,9 +86,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import useRouteOptimization from '@/composables/useRouteOptimization';
-import RouteVisualizer from '@/components/routes/RouteVisualizer.vue';
+import { ref, computed, onMounted } from 'vue'
+import type { Station } from '~/types/transport'
+import useRouteOptimization from '~/composables/useRouteOptimization'
 
 const {
   graph,
@@ -97,67 +97,77 @@ const {
   initializeGraph,
   findOptimalRoute,
   findAlternativeRoutes
-} = useRouteOptimization();
+} = useRouteOptimization()
 
-const stations = ref<Station[]>([]);
+const stations = ref<Station[]>([])
 const stationsMap = computed(() => {
-  const map: Record<string, Station> = {};
+  const map: Record<string, Station> = {}
   stations.value.forEach(station => {
-    map[station.id] = station;
-  });
-  return map;
-});
+    map[station.id] = station
+  })
+  return map
+})
 
-const startStationId = ref<string>('');
-const endStationId = ref<string>('');
-const considerTime = ref(false);
+const startStationId = ref<string>('')
+const endStationId = ref<string>('')
+const considerTime = ref(false)
 const optimalRoute = ref<{
-  path: string[];
-  totalDistance: number;
-  totalTime: number;
-} | null>(null);
+  path: string[]
+  totalDistance?: number
+  totalTime?: number
+} | null>(null)
 const alternativeRoutes = ref<Array<{
-  path: string[];
-  distance: number;
-  time: number;
-}>>([]);
-const visualizerKey = ref(0);
+  path: string[]
+  distance?: number
+  time?: number
+}>>([])
+const visualizerKey = ref(0)
 
 const refreshGraph = async () => {
-  await initializeGraph();
-  // Refresh stations list
-  const response = await $fetch('/api/stations');
-  stations.value = response;
+  await initializeGraph()
+  const response = await $fetch('/api/stations')
+  stations.value = response
   if (response.length) {
-    startStationId.value = response[0].id;
-    endStationId.value = response[1]?.id || '';
+    startStationId.value = response[0].id
+    endStationId.value = response[1]?.id || ''
   }
-  visualizerKey.value++;
-};
+  visualizerKey.value++
+}
 
-const findRoute = () => {
-  if (!startStationId.value || !endStationId.value) return;
+const findRoute = async () => {
+  if (!startStationId.value || !endStationId.value) return
   
-  optimalRoute.value = findOptimalRoute(startStationId.value, endStationId.value, considerTime.value);
-  alternativeRoutes.value = findAlternativeRoutes(startStationId.value, endStationId.value);
-  visualizerKey.value++;
-};
+  try {
+    optimalRoute.value = findOptimalRoute(startStationId.value, endStationId.value, considerTime.value) || {
+      path: [],
+      totalDistance: undefined,
+      totalTime: undefined
+    }
+    
+    alternativeRoutes.value = findAlternativeRoutes(startStationId.value, endStationId.value) || []
+    visualizerKey.value++
+  } catch (err) {
+    console.error('Error finding route:', err)
+    error.value = 'Failed to calculate route'
+  }
+}
 
 const selectAlternative = (route: {
-  path: string[];
-  distance: number;
-  time: number;
+  path: string[]
+  distance?: number
+  time?: number
 }) => {
-  optimalRoute.value = route;
-  visualizerKey.value++;
-};
+  optimalRoute.value = route
+  visualizerKey.value++
+}
 
 onMounted(async () => {
-  await refreshGraph();
-});
+  await refreshGraph()
+})
 </script>
 
 <style scoped>
+/* Your existing styles remain the same */
 .route-optimizer {
   max-width: 1200px;
   margin: 0 auto;

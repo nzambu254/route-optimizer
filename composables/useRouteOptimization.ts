@@ -1,5 +1,5 @@
 import { TransportGraph } from '@/utils/TransportGraph';
-import type { Station, Edge } from '@/types/transport';
+import type { Station, RouteEdge } from '@/types/transport';
 
 export default function useRouteOptimization() {
   const graph = ref<TransportGraph | null>(null);
@@ -13,25 +13,22 @@ export default function useRouteOptimization() {
     try {
       const transportGraph = new TransportGraph();
 
-      // Fetch stations and routes from your backend API
       const [stationsResponse, routesResponse] = await Promise.all([
         $fetch('/api/stations'),
         $fetch('/api/routes')
       ]);
 
-      // Add stations to graph
-      stationsResponse.forEach((station: Station) => {
+      stationsResponse.forEach((station: any) => {
         transportGraph.addStation({
           id: station.id,
           name: station.name,
           coordinates: station.coordinates,
           capacity: station.capacity,
-          operatingHours: station.operating_hours
+          operatingHours: station.operatingHours
         });
       });
 
-      // Add routes to graph
-      routesResponse.forEach((route: Edge) => {
+      routesResponse.forEach((route: any) => {
         transportGraph.addRoute({
           from: route.from_station_id,
           to: route.to_station_id,
