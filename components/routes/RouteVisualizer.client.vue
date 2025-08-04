@@ -2,7 +2,7 @@
 <template>
   <div class="route-visualizer">
     <div ref="mapContainer" class="map-container"></div>
-    <div v-if="path.length === 0" class="no-route">
+    <div v-if="path.length === 0 && !loading" class="no-route">
       <div class="no-route-content">
         <svg class="no-route-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <circle cx="12" cy="10" r="3" />
@@ -23,11 +23,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, watch, nextTick } from 'vue';
-import 'leaflet/dist/leaflet.css';
 import type { Station } from '~/types/transport';
-
-// Import Leaflet only on client side
-const L = process.client ? (await import('leaflet')).default : null;
 
 const props = defineProps({
   path: {
@@ -46,178 +42,324 @@ const props = defineProps({
 
 const mapContainer = ref<HTMLElement | null>(null);
 const loading = ref(true);
-let map: any = null;
-let routeLayer: any = null;
-let markers: any[] = [];
+
+let map: google.maps.Map | null = null;
+let directionsService: google.maps.DirectionsService | null = null;
+let directionsRenderer: google.maps.DirectionsRenderer | null = null;
+let markers: google.maps.Marker[] = [];
+let polyline: google.maps.Polyline | null = null;
+
+const GOOGLE_MAPS_API_KEY = 'AIzaSyBux3LWgjt4Y2pz0vOoF0TBz4K49BWfzlY';
+
+const loadGoogleMapsScript = (): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    // Check if Google Maps is already loaded
+    if (window.google && window.google.maps) {
+      resolve();
+      return;
+    }
+
+    // Check if script is already being loaded
+    if (document.querySelector('script[src*="maps.googleapis.com"]')) {
+      // Wait for it to load
+      const checkLoaded = () => {
+        if (window.google && window.google.maps) {
+          resolve();
+        } else {
+          setTimeout(checkLoaded, 100);
+        }
+      };
+      checkLoaded();
+      return;
+    }
+
+    // Create and load the script
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=geometry`;
+    script.async = true;
+    script.defer = true;
+    
+    script.onload = () => {
+      if (window.google && window.google.maps) {
+        resolve();
+      } else {
+        reject(new Error('Google Maps failed to load'));
+      }
+    };
+    
+    script.onerror = () => {
+      reject(new Error('Failed to load Google Maps script'));
+    };
+
+    document.head.appendChild(script);
+  });
+};
 
 const initMap = async () => {
-  if (!mapContainer.value || !L) return;
+  if (!mapContainer.value) {
+    console.error('Map container not available');
+    loading.value = false;
+    return;
+  }
 
   try {
     loading.value = true;
 
-    // Find center of all stations if path exists
-    let center: [number, number] = [-1.2921, 36.8219]; // Default to Nairobi
+    // Load Google Maps
+    await loadGoogleMapsScript();
+
+    let center = { lat: -1.2921, lng: 36.8219 }; // Default to Nairobi
     if (props.path.length > 0) {
       const firstStation = props.stations[props.path[0]];
       if (firstStation) {
-        center = [firstStation.coordinates.lat, firstStation.coordinates.lng];
+        center = {
+          lat: firstStation.coordinates.lat,
+          lng: firstStation.coordinates.lng
+        };
       }
     }
 
-    map = L.map(mapContainer.value, {
+    // Create map instance
+    map = new google.maps.Map(mapContainer.value, {
       center,
       zoom: 13,
-      zoomControl: false,
-      attributionControl: false
+      mapTypeId: google.maps.MapTypeId.ROADMAP,
+      zoomControl: true,
+      mapTypeControl: false,
+      scaleControl: true,
+      streetViewControl: false,
+      rotateControl: false,
+      fullscreenControl: true,
+      styles: [
+        {
+          featureType: 'poi',
+          elementType: 'labels',
+          stylers: [{ visibility: 'off' }]
+        }
+      ]
     });
 
-    // Add tile layer
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      maxZoom: 18
-    }).addTo(map);
+    // Initialize directions service and renderer
+    directionsService = new google.maps.DirectionsService();
+    directionsRenderer = new google.maps.DirectionsRenderer({
+      suppressMarkers: true, // We'll create custom markers
+      polylineOptions: {
+        strokeColor: '#3498db',
+        strokeWeight: 4,
+        strokeOpacity: 0.8
+      }
+    });
 
-    // Add zoom control to top right
-    L.control.zoom({ position: 'topright' }).addTo(map);
+    directionsRenderer.setMap(map);
 
-    // Add attribution
-    L.control.attribution({ position: 'bottomright' }).addTo(map);
-
-    // Simulate loading delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    loading.value = false;
-
-    // Draw route after map is loaded
-    await nextTick();
+    // Initial render
     drawRoute();
+
+    loading.value = false;
   } catch (error) {
     console.error('Error initializing map:', error);
     loading.value = false;
   }
 };
 
-const drawRoute = () => {
-  if (!map || !L) return;
-
-  // Clear existing layers
-  if (routeLayer) {
-    map.removeLayer(routeLayer);
-    routeLayer = null;
-  }
+const createCustomMarker = (
+  position: google.maps.LatLngLiteral,
+  title: string,
+  isStart: boolean,
+  isEnd: boolean,
+  index: number,
+  station: Station
+): google.maps.Marker => {
+  const markerColor = isStart ? '#e74c3c' : isEnd ? '#27ae60' : '#3498db';
+  const markerText = isStart ? 'S' : isEnd ? 'E' : (index + 1).toString();
   
+  // Create custom marker icon
+  const markerIcon = {
+    url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
+      <svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="16" cy="16" r="14" fill="${markerColor}" stroke="white" stroke-width="3"/>
+        <text x="16" y="21" text-anchor="middle" fill="white" font-family="Arial, sans-serif" font-size="12" font-weight="bold">${markerText}</text>
+      </svg>
+    `)}`,
+    scaledSize: new google.maps.Size(32, 32),
+    anchor: new google.maps.Point(16, 16)
+  };
+
+  const marker = new google.maps.Marker({
+    position,
+    map,
+    title,
+    icon: markerIcon,
+    animation: google.maps.Animation.DROP
+  });
+
+  // Create info window
+  const infoWindow = new google.maps.InfoWindow({
+    content: `
+      <div class="station-popup">
+        <h4>${station.name}</h4>
+        <div class="popup-details">
+          <p><strong>Capacity:</strong> ${station.capacity} vehicles</p>
+          ${station.operatingHours ? `
+            <p><strong>Hours:</strong> ${station.operatingHours.open} - ${station.operatingHours.close}</p>
+          ` : ''}
+          <p><strong>Position:</strong> ${isStart ? 'Start' : isEnd ? 'End' : `Stop ${index + 1}`}</p>
+        </div>
+      </div>
+    `,
+    maxWidth: 250
+  });
+
+  marker.addListener('click', () => {
+    infoWindow.open(map, marker);
+  });
+
+  return marker;
+};
+
+const drawRoute = () => {
+  if (!map) return;
+
+  // Clear existing markers and polyline
   markers.forEach(marker => {
-    map?.removeLayer(marker);
+    marker.setMap(null);
   });
   markers = [];
 
-  if (props.path.length === 0) return;
+  if (polyline) {
+    polyline.setMap(null);
+    polyline = null;
+  }
 
-  const coordinates: [number, number][] = [];
-  const bounds = L.latLngBounds([]);
+  if (props.path.length === 0) {
+    return;
+  }
 
+  const coordinates: google.maps.LatLngLiteral[] = [];
+  const bounds = new google.maps.LatLngBounds();
+
+  // Create markers and collect coordinates
   props.path.forEach((stationId, index) => {
     const station = props.stations[stationId];
     if (station) {
-      const coord: [number, number] = [station.coordinates.lat, station.coordinates.lng];
-      coordinates.push(coord);
-      bounds.extend(coord);
+      const position = {
+        lat: station.coordinates.lat,
+        lng: station.coordinates.lng
+      };
+      
+      coordinates.push(position);
+      bounds.extend(position);
 
-      // Create custom marker icon
       const isStart = index === 0;
       const isEnd = index === props.path.length - 1;
-      const markerColor = isStart ? '#e74c3c' : isEnd ? '#27ae60' : '#3498db';
-      const markerText = isStart ? 'S' : isEnd ? 'E' : (index + 1).toString();
 
-      const marker = L.marker(coord, {
-        icon: L.divIcon({
-          className: 'custom-station-marker',
-          html: `
-            <div class="marker-inner" style="background-color: ${markerColor}">
-              ${markerText}
-            </div>
-          `,
-          iconSize: [32, 32],
-          iconAnchor: [16, 16]
-        }),
-        title: station.name
-      }).addTo(map);
-      
-      // Add popup with station details
-      marker.bindPopup(`
-        <div class="station-popup">
-          <h4>${station.name}</h4>
-          <div class="popup-details">
-            <p><strong>Capacity:</strong> ${station.capacity} vehicles</p>
-            ${station.operatingHours ? `
-              <p><strong>Hours:</strong> ${station.operatingHours.open} - ${station.operatingHours.close}</p>
-            ` : ''}
-            <p><strong>Position:</strong> ${isStart ? 'Start' : isEnd ? 'End' : `Stop ${index + 1}`}</p>
-          </div>
-        </div>
-      `, {
-        maxWidth: 250,
-        className: 'custom-popup'
-      });
+      const marker = createCustomMarker(
+        position,
+        station.name,
+        isStart,
+        isEnd,
+        index,
+        station
+      );
       
       markers.push(marker);
     }
   });
 
-  // Draw route line if multiple coordinates
+  // Draw route line if we have multiple points
   if (coordinates.length > 1) {
-    routeLayer = L.polyline(coordinates, {
-      color: '#3498db',
-      weight: 4,
-      opacity: 0.8,
-      dashArray: '10, 5',
-      lineJoin: 'round',
-      lineCap: 'round'
-    }).addTo(map);
-    
-    // Fit map to show all markers with padding
-    map.fitBounds(bounds, { 
-      padding: [50, 50],
-      maxZoom: 15
+    polyline = new google.maps.Polyline({
+      path: coordinates,
+      geodesic: true,
+      strokeColor: '#3498db',
+      strokeOpacity: 0.8,
+      strokeWeight: 4,
+      icons: [
+        {
+          icon: {
+            path: 'M 0,-1 0,1',
+            strokeOpacity: 1,
+            scale: 4
+          },
+          offset: '0',
+          repeat: '20px'
+        }
+      ]
+    });
+
+    polyline.setMap(map);
+
+    // Fit bounds to show all markers
+    map.fitBounds(bounds, {
+      top: 50,
+      right: 50,
+      bottom: 50,
+      left: 50
+    });
+
+    // Ensure minimum zoom level
+    const listener = google.maps.event.addListener(map, 'bounds_changed', () => {
+      if (map && map.getZoom() && map.getZoom()! > 15) {
+        map.setZoom(15);
+      }
+      google.maps.event.removeListener(listener);
     });
   } else if (coordinates.length === 1) {
-    map.setView(coordinates[0], 15);
+    map.setCenter(coordinates[0]);
+    map.setZoom(15);
   }
 };
 
 onMounted(() => {
   if (process.client) {
-    initMap();
+    nextTick(() => {
+      initMap();
+    });
   }
 });
 
 watch(() => props.path, () => {
   if (!loading.value) {
-    drawRoute();
+    nextTick(() => {
+      drawRoute();
+    });
   }
 }, { deep: true });
 
 watch(() => props.selectedRoute, () => {
   if (!loading.value) {
-    drawRoute();
+    nextTick(() => {
+      drawRoute();
+    });
   }
 });
+
+// Type declaration for Google Maps
+declare global {
+  interface Window {
+    google: any;
+  }
+}
 </script>
 
 <style scoped>
 .route-visualizer {
   position: relative;
   height: 100%;
+  width: 100%;
+  min-height: 500px;
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 
 .map-container {
-  height: 100%;
-  width: 100%;
-  min-height: 500px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
 }
 
 .no-route {
@@ -230,7 +372,7 @@ watch(() => props.selectedRoute, () => {
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-  z-index: 1000;
+  z-index: 10;
 }
 
 .no-route-content {
@@ -269,7 +411,7 @@ watch(() => props.selectedRoute, () => {
   align-items: center;
   justify-content: center;
   background-color: rgba(255, 255, 255, 0.9);
-  z-index: 1001;
+  z-index: 100;
 }
 
 .loading-content {
@@ -292,32 +434,8 @@ watch(() => props.selectedRoute, () => {
   100% { transform: rotate(360deg); }
 }
 
-/* Global styles for Leaflet markers */
-:deep(.custom-station-marker) {
-  background: none !important;
-  border: none !important;
-}
-
-:deep(.marker-inner) {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: bold;
-  font-size: 14px;
-  border: 3px solid white;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  transition: transform 0.2s ease;
-}
-
-:deep(.marker-inner:hover) {
-  transform: scale(1.1);
-}
-
-:deep(.custom-popup .leaflet-popup-content-wrapper) {
+/* Google Maps specific styles */
+:deep(.gm-style-iw-c) {
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
@@ -325,6 +443,7 @@ watch(() => props.selectedRoute, () => {
 :deep(.station-popup) {
   min-width: 200px;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  padding: 0.5rem;
 }
 
 :deep(.station-popup h4) {
@@ -344,5 +463,14 @@ watch(() => props.selectedRoute, () => {
 
 :deep(.popup-details strong) {
   color: #2c3e50;
+}
+
+/* Hide Google Maps controls we don't want */
+:deep(.gm-style .gm-style-cc) {
+  display: none;
+}
+
+:deep(.gm-style .gm-style-mtc) {
+  display: none;
 }
 </style>
