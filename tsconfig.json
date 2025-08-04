@@ -1,0 +1,41 @@
+{
+  "extends": "./.nuxt/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "~/*": ["./*"],
+      "@/*": ["./*"],
+      "#imports": ["./.nuxt/imports.d.ts"],
+      "~~/*": ["./*"],
+      "@@/*": ["./*"]
+    },
+    "typeRoots": [
+      "./node_modules/@types",
+      "./types"
+    ],
+    "types": [
+      "node"
+    ],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "./components/**/*",
+    "./composables/**/*",
+    "./layouts/**/*",
+    "./pages/**/*",
+    "./plugins/**/*",
+    "./server/**/*",
+    "./utils/**/*",
+    "./types/**/*",
+    "./app.config.ts",
+    "./nuxt.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".nuxt",
+    "dist"
+  ]
+}
